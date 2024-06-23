@@ -1,55 +1,56 @@
 use anyhow::Result;
-
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{canonicalize, File},
     io::{Read, Seek, SeekFrom},
     ops::Deref,
     sync::{Arc, RwLock},
 };
 
-// TODO: lru eviction
-struct FileManager {
-    files: Arc<RwLock<HashMap<String, Arc<RwLock<File>>>>>,
+pub struct FileManager {
+    files: RwLock<HashMap<String, Arc<RwLock<File>>>>,
 }
 
 impl FileManager {
-    pub fn new() -> Self {
+    pub fn new() -> FileManager {
         FileManager {
-            files: Arc::new(RwLock::new(HashMap::new())),
+            files: RwLock::new(HashMap::new()),
         }
     }
-    fn open_or_get(&self, filename: &str) -> Result<Arc<RwLock<File>>> {
-        let files = self.files.read().unwrap();
 
-        if let Some(file) = files.get(filename) {
-            return Ok(Arc::clone(file));
+    fn get_or_open(&self, filename: String) -> Result<Arc<RwLock<File>>> {
+        // Check if the file is already opened
+        if let Some(file_arc) = self.files.read().unwrap().get(&filename) {
+            return Ok(file_arc.clone());
         }
 
-        drop(files); // Release read lock
+        // If the file doesn't exist, open it and add to the FileManager
+        let file = File::open(filename.clone())?;
+        let file_arc = Arc::new(RwLock::new(file));
 
-        // Acquire write lock to insert new file
-        let mut files = self.files.write().unwrap();
+        self.files
+            .write()
+            .unwrap()
+            .insert(filename.to_string(), file_arc.clone());
 
-        // Double-check if another thread has inserted the file while we waited for the write lock
-        if let Some(file) = files.get(filename) {
-            return Ok(Arc::clone(file));
-        }
-
-        let new_file = File::open(filename)?;
-        let arc_rwlock_file = Arc::new(RwLock::new(new_file));
-        files.insert(filename.to_string(), Arc::clone(&arc_rwlock_file));
-
-        Ok(arc_rwlock_file)
+        Ok(file_arc)
     }
 
-    pub fn read_part(&self, filename: &str, offset: u64, size: usize) -> Result<Vec<u8>> {
-        let file_rwlock = self.open_or_get(filename)?;
-        let file = file_rwlock.read().unwrap();
+    pub fn read_part(&self, filename: String, start: u64, mut length: usize) -> Result<Vec<u8>> {
+        let filename = canonicalize(filename).unwrap().to_str().unwrap().to_owned();
+        // Get or open the file
+        let file_lock = self.get_or_open(filename)?;
+        let file = file_lock.read().unwrap();
         let mut file = file.deref();
-        file.seek(SeekFrom::Start(offset))?;
+        let file_len = file.metadata().unwrap().len();
+        if (start + length as u64) > file_len {
+            length = (file_len - start) as usize;
+        }
+        // Seek to the specified position
+        file.seek(SeekFrom::Start(start))?;
 
-        let mut buffer = vec![0; size];
+        // Read the specified length of bytes
+        let mut buffer = vec![0; length];
         file.read_exact(&mut buffer)?;
 
         Ok(buffer)

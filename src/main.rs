@@ -4,13 +4,16 @@ mod folder_info;
 
 use anyhow::Result;
 use command::{Command, Question, Response};
+use file_manager::FileManager;
 use folder_info::Directory;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 use text_io::read;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{TcpListener, TcpStream},
 };
+
+const BLOB_SIZE: usize = 10_000_000;
 
 macro_rules! info {
     ($($arg:tt)+) => {
@@ -33,6 +36,9 @@ macro_rules! warn {
 #[tokio::main]
 async fn main() -> Result<()> {
     femme::start();
+    let fm = Arc::new(FileManager::new());
+    let blob = fm.read_part("test".to_owned(), 0, 1);
+    println!("{:#?}", blob);
     // TODO: add configuration support
     info!("Configuration is still unsupported. Please enter IP address below. (Cover IPv6 adresses with braces and seperate port with ':')");
     print!("> ");
@@ -41,17 +47,24 @@ async fn main() -> Result<()> {
     info!("Listener started on {}", address);
 
     loop {
+        let fm = fm.clone();
         let (mut tcp_stream, socket_addr) = listener.accept().await?;
         tokio::spawn(async move {
             info!("{} is connected", socket_addr);
-            handle_client(&mut tcp_stream, socket_addr).await.unwrap();
+            handle_client(&mut tcp_stream, socket_addr, fm)
+                .await
+                .unwrap();
             tcp_stream.shutdown().await.unwrap();
             info!("{} is disconnected", socket_addr);
         });
     }
 }
 
-async fn handle_client(socket: &mut TcpStream, socket_addr: SocketAddr) -> Result<()> {
+async fn handle_client(
+    socket: &mut TcpStream,
+    socket_addr: SocketAddr,
+    fm: Arc<FileManager>,
+) -> Result<()> {
     let (r, w) = socket.split();
     let mut w = BufWriter::new(w);
     let mut r = BufReader::new(r);
@@ -89,7 +102,18 @@ async fn handle_client(socket: &mut TcpStream, socket_addr: SocketAddr) -> Resul
                         w.write_all(json.as_bytes()).await.unwrap();
                         w.flush().await.unwrap();
                     }
-                    Question::Download(_part) => {}
+                    Question::Download(part) => {
+                        let data = fm
+                            .read_part(command.path, (part * BLOB_SIZE) as u64, BLOB_SIZE)
+                            .unwrap();
+                        let res = Response::<Vec<u8>> {
+                            to_id: command.id,
+                            response: data,
+                        };
+                        let json = serde_json::to_string(&res).unwrap();
+                        w.write_all(json.as_bytes()).await.unwrap();
+                        w.flush().await.unwrap();
+                    }
                 };
                 text.clear();
             }
