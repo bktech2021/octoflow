@@ -6,39 +6,37 @@ use anyhow::Result;
 use command::{Command, Question, Response};
 use file_manager::FileManager;
 use folder_info::Directory;
+use simple_logger::SimpleLogger;
 use std::{net::SocketAddr, sync::Arc};
 use text_io::read;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{TcpListener, TcpStream},
 };
-
 const BLOB_SIZE: usize = 10_000_000;
 
 macro_rules! info {
     ($($arg:tt)+) => {
-        log::info!(target: "[INFO]", $($arg)+);
+        log::info!($($arg)+);
     };
 }
 
 macro_rules! error {
     ($($arg:tt)+) => {
-        log::error!(target: "[ERROR]", $($arg)+);
+        log::error!($($arg)+);
     };
 }
 
 macro_rules! warn {
     ($($arg:tt)+) => {
-        log::warn!(target: "[WARNING]", $($arg)+);
+        log::warn!($($arg)+);
     };
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    femme::start();
+    SimpleLogger::new().init().unwrap();
     let fm = Arc::new(FileManager::new());
-    let blob = fm.read_part("test".to_owned(), 0, 1);
-    println!("{:#?}", blob);
     // TODO: add configuration support
     info!("Configuration is still unsupported. Please enter IP address below. (Cover IPv6 adresses with braces and seperate port with ':')");
     print!("> ");
